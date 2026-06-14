@@ -101,12 +101,12 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",  # Vite React Web
     "http://localhost:8081",  # Expo Mobil (Web Modu)
     "http://127.0.0.1:8081",  # Expo Mobil (Web Modu Alternatif IP)
-    "https://e-teacher-frontend.vercel.app", # VERCEL FRONTEND ADRESİ EKLENDİ (CORS Hatası Çözümü)
+    "https://e-teacher-mobile.vercel.app", # VERCEL FRONTEND ADRESİ EKLENDİ (CORS Hatası Çözümü)
 ]
 
 # CSRF (Güvenlik) hatalarını önlemek için Vercel adresini güvenilir ilan ediyoruz
 CSRF_TRUSTED_ORIGINS = [
-    "https://e-teacher-frontend.vercel.app",
+    "https://e-teacher-mobile.vercel.app",
 ]
 
 REST_FRAMEWORK = {
