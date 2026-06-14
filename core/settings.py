@@ -2,6 +2,10 @@ import os
 from pathlib import Path
 from datetime import timedelta
 import dj_database_url
+from dotenv import load_dotenv  # Çevresel değişkenleri okumak için ekledik
+
+# .env dosyasını zorla oku (Böylece şifreyi kodun içine yazmamıza gerek kalmaz)
+load_dotenv()
 
 # Proje dizin yolları
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -62,10 +66,10 @@ TEMPLATES = [
 WSGI_APPLICATION = 'core.wsgi.application'
 
 # --- VERİTABANI ---
-# Render'da DATABASE_URL varsa onu kullanır, yoksa senin Neon linkini kullanır
+# ARTIK ŞİFRE KODDA DEĞİL! Direkt olarak .env dosyasından veya Render ortamından çekecek.
 DATABASES = {
     'default': dj_database_url.config(
-        default='postgresql://neondb_owner:npg_Ww5zUK1TFaXh@ep-restless-math-an3zdlr6-pooler.c-6.us-east-1.aws.neon.tech/neondb?sslmode=require',
+        default=os.environ.get('DATABASE_URL'), 
         conn_max_age=600
     )
 }
