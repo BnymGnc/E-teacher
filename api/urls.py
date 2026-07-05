@@ -26,6 +26,7 @@ urlpatterns = [
     path('summarize-file/', views.APIFileSummaryView.as_view(), name='summarize-file'),
 
     path('calendar/auth/', views.GoogleCalendarInitView.as_view(), name='calendar_auth'),
+    path('calendar/sync/', views.GoogleCalendarSyncView.as_view(), name='calendar_sync'),
     path('google/callback/', views.GoogleCalendarCallbackView.as_view(), name='google_callback'),
 
     # Admin Paneli Linkleri

@@ -9,6 +9,7 @@ import requests
 import fitz  # PyMuPDF (PDF okumak için)
 from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request as GoogleAuthRequest
 from googleapiclient.discovery import build
 
 # 3. Django Çekirdek Kütüphaneleri
@@ -136,7 +137,8 @@ class UserProfileView(views.APIView):
         return Response({
             'username': user.username,
             'email': user.email,
-            'ai_credits': ai_credits
+            'ai_credits': ai_credits,
+            'is_calendar_connected': hasattr(user, 'calendar_credential')
         })
 
     def put(self, request):
@@ -365,20 +367,53 @@ class ScheduleView(views.APIView):
         ).order_by('-created_at').first() 
         
         if activity:
-            return Response({'schedule': activity.data.get('schedule', [])})
-        return Response({'schedule': None})
+            stored_data = activity.data or {}
+            schedule_value = stored_data.get('schedule', [])
+
+            # Eski mobil sürüm tüm yapıyı schedule objesinin içinde saklamış olabilir.
+            if isinstance(schedule_value, dict):
+                return Response({
+                    'plan': stored_data.get('plan') or schedule_value.get('plan'),
+                    'pool': stored_data.get('pool') or schedule_value.get('pool', []),
+                    'rows': stored_data.get('rows') or schedule_value.get('rows', []),
+                })
+
+            return Response({
+                'plan': stored_data.get('plan'),
+                'pool': stored_data.get('pool', []),
+                'rows': stored_data.get('rows', schedule_value if isinstance(schedule_value, list) else []),
+            })
+        return Response({'plan': None, 'pool': [], 'rows': []})
 
     def post(self, request):
-        schedule_data = request.data.get('schedule', [])
+        schedule_value = request.data.get('schedule', [])
+        nested_schedule = schedule_value if isinstance(schedule_value, dict) else {}
+        plan = request.data.get('plan') or nested_schedule.get('plan')
+        pool = request.data.get('pool') or nested_schedule.get('pool', [])
+        rows = request.data.get('rows') or nested_schedule.get('rows')
+
+        if rows is None:
+            rows = schedule_value if isinstance(schedule_value, list) else []
+
         activity, created = UserActivity.objects.update_or_create(
             user=request.user,
             activity_type='schedule',
             defaults={
                 'title': 'Haftalık Ders Programı',
-                'data': {'schedule': schedule_data}
+                'data': {
+                    'plan': plan,
+                    'pool': pool,
+                    'rows': rows,
+                    'schedule': rows,
+                }
             }
         )
-        return Response({'message': 'Programın başarıyla kaydedildi!'})
+        return Response({
+            'message': 'Programın başarıyla kaydedildi!',
+            'plan': plan,
+            'pool': pool,
+            'rows': rows,
+        })
 
 class DailyReportView(views.APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -576,6 +611,45 @@ class GoogleCalendarCallbackView(views.APIView):
             
         except Exception as e:
             return Response({'error': str(e)}, status=500)
+
+
+class GoogleCalendarSyncView(views.APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        try:
+            saved_credentials = request.user.calendar_credential
+            credentials = Credentials(
+                token=saved_credentials.token,
+                refresh_token=saved_credentials.refresh_token,
+                token_uri=saved_credentials.token_uri,
+                client_id=saved_credentials.client_id,
+                client_secret=saved_credentials.client_secret,
+                scopes=saved_credentials.scopes.split(',')
+            )
+
+            if credentials.expired and credentials.refresh_token:
+                credentials.refresh(GoogleAuthRequest())
+                saved_credentials.token = credentials.token
+                saved_credentials.save(update_fields=['token'])
+
+            service = build('calendar', 'v3', credentials=credentials)
+            calendar = service.calendars().get(calendarId='primary').execute()
+
+            return Response({
+                'message': 'Google Takvim bağlantısı doğrulandı.',
+                'calendar_name': calendar.get('summary', 'Birincil Takvim')
+            })
+        except GoogleCalendarCredential.DoesNotExist:
+            return Response(
+                {'error': 'Google Takvim bağlı değil. Önce takvimi bağlayın.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as exc:
+            return Response(
+                {'error': f'Google Takvim bağlantısı doğrulanamadı: {str(exc)}'},
+                status=status.HTTP_502_BAD_GATEWAY
+            )
         
 # --- 8. GOOGLE MEET VE DERS OLUŞTURMA ---
 class CreateLessonEventView(views.APIView):
