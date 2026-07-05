@@ -29,6 +29,36 @@ from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from .models import UserActivity, UserProfile, Lesson, GoogleCalendarCredential
 
 from rest_framework import generics
+
+
+GROQ_CHAT_COMPLETIONS_URL = 'https://api.groq.com/openai/v1/chat/completions'
+GROQ_DEFAULT_MODEL = 'openai/gpt-oss-20b'
+
+
+def request_groq_completion(messages, *, response_format=None, temperature=0.4, max_completion_tokens=2048):
+    """Groq'nun OpenAI uyumlu Chat Completions endpoint'ine istek atar."""
+    api_key = os.environ.get('GROQ_API_KEY')
+    if not api_key:
+        raise RuntimeError('GROQ_API_KEY ortam değişkeni tanımlı değil.')
+
+    payload = {
+        'model': os.environ.get('GROQ_MODEL', GROQ_DEFAULT_MODEL),
+        'messages': messages,
+        'temperature': temperature,
+        'max_completion_tokens': max_completion_tokens,
+    }
+    if response_format:
+        payload['response_format'] = response_format
+
+    return requests.post(
+        GROQ_CHAT_COMPLETIONS_URL,
+        json=payload,
+        headers={
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json',
+        },
+        timeout=60,
+    )
 from .serializers import LessonSerializer # Yukarıda oluşturduğumuz serializer
 
 # --- ADMİN KOTA VE KULLANICI YÖNETİMİ ---
@@ -220,7 +250,7 @@ class MLTargetNetsView(views.APIView):
         })
 
 
-# --- 4. HAZIR API (OPENROUTER KULLANILARAK - KOTA DÜŞÜRENLER) ---
+# --- 4. HAZIR API (GROQ KULLANILARAK - KOTA DÜŞÜRENLER) ---
 class APIChatView(views.APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -233,23 +263,15 @@ class APIChatView(views.APIView):
         if not message:
             return Response({'error': 'Mesaj içeriği boş olamaz.'}, status=400)
 
-        api_key = os.environ.get('OPENROUTER_API_KEY')
-        
         try:
-            headers = {
-                'Authorization': f'Bearer {api_key}',
-                'Content-Type': 'application/json',
-                'HTTP-Referer': 'http://localhost:5173', 
-                'X-Title': 'E-Teacher App'
-            }
-            payload = {
-                'model': 'openai/gpt-4o-mini', 
-                'messages': [
+            resp = request_groq_completion(
+                messages=[
                     {'role': 'system', 'content': 'Sen şefkatli, anlayışlı ve motive edici bir rehber öğretmen/psikologsun. Sınav stresi çeken öğrencilere kısa, net ve rahatlatıcı tavsiyeler ver. Çok uzun yazma.'},
                     {'role': 'user', 'content': message}
-                ]
-            }
-            resp = requests.post('https://openrouter.ai/api/v1/chat/completions', json=payload, headers=headers)
+                ],
+                temperature=0.6,
+                max_completion_tokens=700,
+            )
             
             if resp.ok:
                 if profile:
@@ -271,23 +293,15 @@ class APISummaryView(views.APIView):
             return Response({'error': 'Yapay zeka kullanım kotanız dolmuştur.'}, status=403)
 
         text = request.data.get('text', '')
-        api_key = os.environ.get('OPENROUTER_API_KEY')
-        
         try:
-            headers = {
-                'Authorization': f'Bearer {api_key}',
-                'Content-Type': 'application/json',
-                'HTTP-Referer': 'http://localhost:5173',
-                'X-Title': 'E-Teacher App'
-            }
-            payload = {
-                'model': 'openai/gpt-4o-mini',
-                'messages': [
+            resp = request_groq_completion(
+                messages=[
                     {'role': 'system', 'content': 'Gönderilen uzun metinleri veya ders notlarını okuyup, en önemli kısımlarını anlaşılır ve akılda kalıcı maddeler halinde özetleyen bir asistansın. Türkçe yanıt ver.'},
                     {'role': 'user', 'content': f"Şu metni benim için özetle:\n\n{text}"}
-                ]
-            }
-            resp = requests.post('https://openrouter.ai/api/v1/chat/completions', json=payload, headers=headers)
+                ],
+                temperature=0.3,
+                max_completion_tokens=1800,
+            )
             
             if resp.ok:
                 if profile:
@@ -310,45 +324,83 @@ class APIQuizGenerateView(views.APIView):
 
         topic = request.data.get('topic', 'Genel Kültür')
         difficulty = request.data.get('difficulty', 'Orta')
-        count = request.data.get('count', 5)
-        api_key = os.environ.get('OPENROUTER_API_KEY')
+        try:
+            count = max(1, min(int(request.data.get('count', 5)), 20))
+        except (TypeError, ValueError):
+            count = 5
         
         prompt = f"""
         Lütfen '{topic}' konusunda, '{difficulty}' zorluk derecesinde {count} soruluk çoktan seçmeli bir test hazırla.
-        YANITINI SADECE VE SADECE AŞAĞIDAKİ GİBİ GEÇERLİ BİR JSON FORMATINDA VER. BAŞKA HİÇBİR AÇIKLAMA YAZMA:
-        [
+        Tam olarak {count} soru üret. Yanıtın yalnızca "quiz" alanını içeren bir JSON nesnesi olsun;
+        Markdown, kod bloğu, başlık veya açıklama ekleme. Her soru aşağıdaki dört alanı eksiksiz içersin:
+        {{"quiz": [
           {{
             "question": "Soru metni buraya gelecek",
             "options": ["Seçenek A", "Seçenek B", "Seçenek C", "Seçenek D", "Seçenek E"],
             "correctAnswer": "Doğru olan seçeneğin tam metni",
             "explanation": "Bu cevabın neden doğru olduğunun açıklaması"
           }}
-        ]
+        ]}}
         """
         
         try:
-            headers = {
-                'Authorization': f'Bearer {api_key}',
-                'Content-Type': 'application/json',
-                'HTTP-Referer': 'http://localhost:5173',
-                'X-Title': 'E-Teacher App'
+            quiz_schema = {
+                'type': 'object',
+                'properties': {
+                    'quiz': {
+                        'type': 'array',
+                        'items': {
+                            'type': 'object',
+                            'properties': {
+                                'question': {'type': 'string'},
+                                'options': {
+                                    'type': 'array',
+                                    'items': {'type': 'string'},
+                                },
+                                'correctAnswer': {'type': 'string'},
+                                'explanation': {'type': 'string'},
+                            },
+                            'required': ['question', 'options', 'correctAnswer', 'explanation'],
+                            'additionalProperties': False,
+                        },
+                    },
+                },
+                'required': ['quiz'],
+                'additionalProperties': False,
             }
-            payload = {
-                'model': 'openai/gpt-4o-mini',
-                'messages': [
-                    {'role': 'system', 'content': 'Sen bir sınav hazırlama asistanısın. Sadece JSON formatında çıktı verirsin.'},
+            resp = request_groq_completion(
+                messages=[
+                    {'role': 'system', 'content': 'Sen Türkçe çoktan seçmeli sınav hazırlayan bir API asistanısın. Yalnızca istenen JSON şemasına uygun çıktı ver.'},
                     {'role': 'user', 'content': prompt}
-                ]
-            }
-            resp = requests.post('https://openrouter.ai/api/v1/chat/completions', json=payload, headers=headers)
+                ],
+                response_format={
+                    'type': 'json_schema',
+                    'json_schema': {
+                        'name': 'quiz_questions',
+                        'strict': True,
+                        'schema': quiz_schema,
+                    },
+                },
+                temperature=0.3,
+                max_completion_tokens=5000,
+            )
             
             if resp.ok:
                 if profile:
                     profile.ai_credits -= 1
                     profile.save()
                 content = resp.json()['choices'][0]['message']['content']
-                clean_content = content.replace('```json', '').replace('```', '').strip()
+                clean_content = re.sub(r'^\s*```(?:json)?\s*|\s*```\s*$', '', content, flags=re.IGNORECASE).strip()
+                if not clean_content.startswith(('[', '{')):
+                    array_start = clean_content.find('[')
+                    array_end = clean_content.rfind(']')
+                    if array_start >= 0 and array_end > array_start:
+                        clean_content = clean_content[array_start:array_end + 1]
                 quiz_data = json.loads(clean_content)
+                if isinstance(quiz_data, dict):
+                    quiz_data = quiz_data.get('quiz', [])
+                if not isinstance(quiz_data, list) or len(quiz_data) != count:
+                    raise ValueError('Model beklenen sayıda soru döndürmedi.')
                 return Response({'quiz': quiz_data})
             else:
                 return Response({'error': 'Yapay zeka servisine ulaşılamadı.'}, status=400)
@@ -489,21 +541,15 @@ class APIFileSummaryView(views.APIView):
             return Response({'error': 'Dosya içeriği çok kısa veya metin bulunamadı.'}, status=400)
 
         # Mevcut AI Özetleme Mantığını Çağırıyoruz (Kod tekrarı yapmamak için senin sistemin)
-        api_key = os.environ.get('OPENROUTER_API_KEY')
         try:
-            headers = {
-                'Authorization': f'Bearer {api_key}',
-                'Content-Type': 'application/json',
-                'X-Title': 'E-Teacher App'
-            }
-            payload = {
-                'model': 'openai/gpt-4o-mini',
-                'messages': [
+            resp = request_groq_completion(
+                messages=[
                     {'role': 'system', 'content': 'Sen bir ders asistanısın. Yüklenen PDF içeriğini en önemli başlıklarla özetle.'},
                     {'role': 'user', 'content': f"Şu PDF içeriğini özetle:\n\n{text[:10000]}"} # Çok uzunsa ilk 10k karakter
-                ]
-            }
-            resp = requests.post('https://openrouter.ai/api/v1/chat/completions', json=payload, headers=headers)
+                ],
+                temperature=0.3,
+                max_completion_tokens=1800,
+            )
             
             if resp.ok:
                 if profile:
