@@ -1,0 +1,22 @@
+services:
+  backend:
+    build:
+      context: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DEBUG: "False"
+      PORT: "8000"
+      DATABASE_URL: "${DATABASE_URL:-sqlite:////app/data/db.sqlite3}"
+      SECRET_KEY: "${SECRET_KEY:-docker-development-secret-change-me}"
+      GROQ_API_KEY: "${GROQ_API_KEY:-}"
+      GROQ_MODEL: "${GROQ_MODEL:-openai/gpt-oss-20b}"
+    volumes:
+      - backend_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  backend_data:
