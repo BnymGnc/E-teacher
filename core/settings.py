@@ -3,6 +3,7 @@ from pathlib import Path
 from datetime import timedelta
 import dj_database_url
 from dotenv import load_dotenv  # Çevresel değişkenleri okumak için ekledik
+from django.core.exceptions import ImproperlyConfigured
 
 # .env dosyasını zorla oku (Böylece şifreyi kodun içine yazmamıza gerek kalmaz)
 load_dotenv()
@@ -10,10 +11,38 @@ load_dotenv()
 # Proje dizin yolları
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+def env_bool(name, default=False):
+    return os.environ.get(name, str(default)).strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+def env_list(name, default=''):
+    return [value.strip() for value in os.environ.get(name, default).split(',') if value.strip()]
+
+
 # --- GÜVENLİK AYARLARI ---
-SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-e-teacher-gelistirme-anahtari-12345')
-DEBUG = os.environ.get('DEBUG', 'True') == 'True'
-ALLOWED_HOSTS = ['*']
+DEBUG = env_bool('DEBUG', False)
+SECRET_KEY = os.environ.get('SECRET_KEY')
+
+if not SECRET_KEY:
+    if DEBUG:
+        SECRET_KEY = 'django-insecure-local-development-only'
+    else:
+        raise ImproperlyConfigured('Production ortamında SECRET_KEY tanımlanmalıdır.')
+
+ALLOWED_HOSTS = env_list(
+    'ALLOWED_HOSTS',
+    'localhost,127.0.0.1' if DEBUG else 'e-teacher.onrender.com',
+)
+
+# Render HTTPS sonlandırmasını Django'ya doğru aktarır.
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+SECURE_SSL_REDIRECT = env_bool('SECURE_SSL_REDIRECT', not DEBUG)
+SECURE_HSTS_SECONDS = int(os.environ.get('SECURE_HSTS_SECONDS', '0' if DEBUG else '31536000'))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool('SECURE_HSTS_INCLUDE_SUBDOMAINS', not DEBUG)
+SECURE_HSTS_PRELOAD = env_bool('SECURE_HSTS_PRELOAD', not DEBUG)
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = 'same-origin'
+X_FRAME_OPTIONS = 'DENY'
 
 # --- UYGULAMALAR ---
 INSTALLED_APPS = [
@@ -127,7 +156,7 @@ SIMPLE_JWT = {
 }
 
 # --- GOOGLE OAUTH VE SESSION GÜVENLİK AYARLARI ---
-SESSION_COOKIE_SAMESITE = 'None'
-SESSION_COOKIE_SECURE = True
-CSRF_COOKIE_SAMESITE = 'None'
-CSRF_COOKIE_SECURE = True
+SESSION_COOKIE_SAMESITE = 'Lax' if DEBUG else 'None'
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SAMESITE = 'Lax' if DEBUG else 'None'
+CSRF_COOKIE_SECURE = not DEBUG
